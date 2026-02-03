@@ -109,6 +109,16 @@ class MuZeroConfig:
         self.self_play_delay = 0  # Number of seconds to wait after each played game
         self.training_delay = 0  # Number of seconds to wait after each training step
         self.ratio = None  # Desired training steps per self played step ratio. Equivalent to a synchronous version, training can take much longer. Set it to None to disable it
+
+
+        ### AlphaBM (Barely-win/Margin) Settings
+        # When enabled, shapes rewards to encourage winning by small margins
+        # rather than maximizing winning margin. This creates "barely winning" behavior.
+        self.alphabm_enabled = False  # Set to True to enable AlphaBM reward shaping
+        self.alphabm_target_margin = 0.1  # Target value estimate when winning (small = close game)
+        self.alphabm_margin_penalty_weight = 0.3  # How much to penalize deviating from target margin
+        self.alphabm_win_bonus = 1.0  # Base bonus for winning (multiplied by game reward)
+        self.alphabm_threshold = 0.3  # Only apply BM penalty when avg value > this threshold
         # fmt: on
 
     def visit_softmax_temperature_fn(self, trained_steps):

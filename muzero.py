@@ -114,6 +114,10 @@ class MuZero:
             "num_played_steps": 0,
             "num_reanalysed_games": 0,
             "terminate": False,
+            # AlphaBM metrics
+            "alphabm_avg_winning_value": 0,
+            "alphabm_margin_penalty": 0,
+            "alphabm_shaped_reward": 0,
         }
         self.replay_buffer = {}
 
@@ -262,6 +266,10 @@ class MuZero:
             "num_played_games",
             "num_played_steps",
             "num_reanalysed_games",
+            # AlphaBM metrics
+            "alphabm_avg_winning_value",
+            "alphabm_margin_penalty",
+            "alphabm_shaped_reward",
         ]
         info = ray.get(self.shared_storage_worker.get_info.remote(keys))
         try:
@@ -320,6 +328,23 @@ class MuZero:
                 writer.add_scalar("3.Loss/Value_loss", info["value_loss"], counter)
                 writer.add_scalar("3.Loss/Reward_loss", info["reward_loss"], counter)
                 writer.add_scalar("3.Loss/Policy_loss", info["policy_loss"], counter)
+                # AlphaBM metrics
+                if getattr(self.config, 'alphabm_enabled', False):
+                    writer.add_scalar(
+                        "4.AlphaBM/1.Avg_winning_value",
+                        info["alphabm_avg_winning_value"],
+                        counter,
+                    )
+                    writer.add_scalar(
+                        "4.AlphaBM/2.Margin_penalty",
+                        info["alphabm_margin_penalty"],
+                        counter,
+                    )
+                    writer.add_scalar(
+                        "4.AlphaBM/3.Shaped_reward",
+                        info["alphabm_shaped_reward"],
+                        counter,
+                    )
                 print(
                     f'Last test reward: {info["total_reward"]:.2f}. Training step: {info["training_step"]}/{self.config.training_steps}. Played games: {info["num_played_games"]}. Loss: {info["total_loss"]:.2f}',
                     end="\r",

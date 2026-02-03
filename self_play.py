@@ -8,6 +8,86 @@ import torch
 import models
 
 
+def get_alphabm_config(config, key, default):
+    """Safely get AlphaBM config value with default fallback."""
+    return getattr(config, key, default)
+
+
+def compute_alphabm_shaped_reward(base_reward, game_history, config):
+    """
+    AlphaBM reward shaping: penalize winning by large margins.
+
+    For two-player games, when a player wins:
+    - Compute the average value estimate during positions where they were ahead
+    - If this average is much higher than the target margin, apply a penalty
+    - This encourages the agent to win by smaller margins ("barely winning")
+
+    Args:
+        base_reward: The original game reward (e.g., +10 for win)
+        game_history: GameHistory object containing root_values and to_play_history
+        config: MuZeroConfig with AlphaBM parameters
+
+    Returns:
+        Shaped reward value
+    """
+    if not get_alphabm_config(config, 'alphabm_enabled', False) or base_reward <= 0:
+        # Only shape positive rewards (wins)
+        # Losses and draws are not modified
+        return base_reward
+
+    # Get value estimates from the game
+    root_values = [v for v in game_history.root_values if v is not None]
+
+    if len(root_values) == 0:
+        return base_reward
+
+    # For two-player games, value estimates are from the perspective of the current player
+    # We want to compute how "dominant" the winning player was
+    # Higher absolute values = more dominant position
+
+    # Compute average of value estimates when the winning player was ahead
+    # (positive values from the winner's perspective)
+    winning_values = []
+    for i, value in enumerate(root_values):
+        # In two-player zero-sum games, positive value = current player is ahead
+        # The reward goes to the player who just moved, so we look at their perspective
+        if value is not None and value > 0:
+            winning_values.append(value)
+
+    # Get config values with safe defaults
+    win_bonus = get_alphabm_config(config, 'alphabm_win_bonus', 1.0)
+    threshold = get_alphabm_config(config, 'alphabm_threshold', 0.3)
+    target_margin = get_alphabm_config(config, 'alphabm_target_margin', 0.1)
+    margin_penalty_weight = get_alphabm_config(config, 'alphabm_margin_penalty_weight', 0.3)
+
+    if len(winning_values) == 0:
+        # No positions where winner was clearly ahead - no penalty
+        return base_reward * win_bonus
+
+    avg_winning_value = numpy.mean(winning_values)
+
+    # Only apply penalty if average winning value exceeds threshold
+    if avg_winning_value > threshold:
+        # Compute margin penalty: how far from target margin
+        margin_excess = abs(avg_winning_value - target_margin)
+        margin_penalty = margin_excess * margin_penalty_weight
+
+        # Shaped reward: base win bonus minus margin penalty
+        shaped_reward = (base_reward * win_bonus) - margin_penalty
+
+        # Store AlphaBM metrics in game_history for logging
+        if not hasattr(game_history, 'alphabm_metrics'):
+            game_history.alphabm_metrics = {}
+        game_history.alphabm_metrics['avg_winning_value'] = avg_winning_value
+        game_history.alphabm_metrics['margin_penalty'] = margin_penalty
+        game_history.alphabm_metrics['shaped_reward'] = shaped_reward
+        game_history.alphabm_metrics['original_reward'] = base_reward
+
+        return shaped_reward
+
+    return base_reward * win_bonus
+
+
 @ray.remote
 class SelfPlay:
     """
@@ -85,6 +165,22 @@ class SelfPlay:
                                 for i, reward in enumerate(game_history.reward_history)
                                 if game_history.to_play_history[i - 1]
                                 != self.config.muzero_player
+                            ),
+                        }
+                    )
+
+                # Log AlphaBM metrics if available
+                if get_alphabm_config(self.config, 'alphabm_enabled', False) and hasattr(game_history, 'alphabm_metrics'):
+                    shared_storage.set_info.remote(
+                        {
+                            "alphabm_avg_winning_value": game_history.alphabm_metrics.get(
+                                'avg_winning_value', 0
+                            ),
+                            "alphabm_margin_penalty": game_history.alphabm_metrics.get(
+                                'margin_penalty', 0
+                            ),
+                            "alphabm_shaped_reward": game_history.alphabm_metrics.get(
+                                'shaped_reward', 0
                             ),
                         }
                     )
@@ -173,6 +269,12 @@ class SelfPlay:
                     self.game.render()
 
                 game_history.store_search_statistics(root, self.config.action_space)
+
+                # Apply AlphaBM reward shaping at game end (terminal reward)
+                if done and reward != 0:
+                    reward = compute_alphabm_shaped_reward(
+                        reward, game_history, self.config
+                    )
 
                 # Next batch
                 game_history.action_history.append(action)
