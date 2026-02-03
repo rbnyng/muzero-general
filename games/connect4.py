@@ -116,7 +116,7 @@ class MuZeroConfig:
         # rather than maximizing winning margin. This creates "barely winning" behavior.
         self.alphabm_enabled = False  # Set to True to enable AlphaBM reward shaping
         self.alphabm_target_margin = 0.1  # Target value estimate when winning (small = close game)
-        self.alphabm_margin_penalty_weight = 0.3  # How much to penalize deviating from target margin
+        self.alphabm_margin_penalty_weight = 2.0  # How much to penalize deviating from target margin
         self.alphabm_win_bonus = 1.0  # Base bonus for winning (multiplied by game reward)
         self.alphabm_threshold = 0.3  # Only apply BM penalty when avg value > this threshold
         # fmt: on
