@@ -254,7 +254,7 @@ class MuZero:
         print(f"\nTraining... Logging to {csv_path}")
         print(f"Config: alphabm_enabled={getattr(self.config, 'alphabm_enabled', False)}")
 
-        last_logged_step = -1
+        last_logged_step = 0
         try:
             while True:
                 info = ray.get(self.shared_storage_worker.get_info.remote(keys))
@@ -263,7 +263,8 @@ class MuZero:
                 if step >= self.config.training_steps:
                     break
 
-                if step > last_logged_step and step % log_interval == 0:
+                # Log every log_interval steps (don't require exact multiple)
+                if step >= last_logged_step + log_interval:
                     last_logged_step = step
 
                     # Append to CSV
@@ -286,7 +287,7 @@ class MuZero:
                         )
                     )
 
-                time.sleep(1)
+                time.sleep(0.5)
 
         except KeyboardInterrupt:
             print("\nInterrupted by user")
