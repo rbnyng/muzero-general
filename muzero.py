@@ -225,6 +225,19 @@ class MuZero:
         # Start training (same as train() but without tensorboard logging)
         self.train(log_in_tensorboard=False)
 
+        # Start test worker to get evaluation metrics
+        self.test_worker = self_play.SelfPlay.options(
+            num_cpus=0, num_gpus=0,
+        ).remote(
+            self.checkpoint,
+            self.Game,
+            self.config,
+            self.config.seed + self.config.num_workers,
+        )
+        self.test_worker.continuous_self_play.remote(
+            self.shared_storage_worker, None, True
+        )
+
         # CSV logging
         csv_path = self.config.results_path / "metrics.csv"
         keys = [
