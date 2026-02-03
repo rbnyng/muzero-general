@@ -15,16 +15,14 @@ def get_alphabm_config(config, key, default):
 
 def compute_alphabm_shaped_reward(base_reward, game_history, config):
     """
-    AlphaBM reward shaping: penalize winning by large margins.
+    AlphaBM reward shaping: penalize winning too quickly.
 
-    For two-player games, when a player wins:
-    - Compute the average value estimate during positions where they were ahead
-    - If this average is much higher than the target margin, apply a penalty
-    - This encourages the agent to win by smaller margins ("barely winning")
+    Instead of using value estimates (which the value head can game),
+    we penalize based on episode length - shorter games = more dominant wins.
 
     Args:
         base_reward: The original game reward (e.g., +10 for win)
-        game_history: GameHistory object containing root_values and to_play_history
+        game_history: GameHistory object containing action_history
         config: MuZeroConfig with AlphaBM parameters
 
     Returns:
@@ -32,60 +30,39 @@ def compute_alphabm_shaped_reward(base_reward, game_history, config):
     """
     if not get_alphabm_config(config, 'alphabm_enabled', False) or base_reward <= 0:
         # Only shape positive rewards (wins)
-        # Losses and draws are not modified
         return base_reward
 
-    # Get value estimates from the game
-    root_values = [v for v in game_history.root_values if v is not None]
+    # Get episode length (number of moves played)
+    episode_length = len(game_history.action_history) - 1  # -1 for initial dummy action
 
-    if len(root_values) == 0:
-        return base_reward
+    # Config values
+    target_length = get_alphabm_config(config, 'alphabm_target_length', 30)  # Target game length
+    length_penalty_weight = get_alphabm_config(config, 'alphabm_length_penalty_weight', 0.5)
+    min_length = get_alphabm_config(config, 'alphabm_min_length', 10)  # No penalty above this
 
-    # For two-player games, value estimates are from the perspective of the current player
-    # We want to compute how "dominant" the winning player was
-    # Higher absolute values = more dominant position
+    # Only penalize quick wins (games shorter than target)
+    if episode_length < target_length:
+        # Linear penalty: shorter games get more penalty
+        # At min_length, penalty is maximal
+        # At target_length, penalty is 0
+        length_shortfall = target_length - episode_length
+        margin_penalty = length_shortfall * length_penalty_weight
+        shaped_reward = base_reward - margin_penalty
+    else:
+        # Long games get full reward (or even bonus)
+        shaped_reward = base_reward
+        margin_penalty = 0
+        length_shortfall = 0
 
-    # Compute average of value estimates when the winning player was ahead
-    # (positive values from the winner's perspective)
-    winning_values = []
-    for i, value in enumerate(root_values):
-        # In two-player zero-sum games, positive value = current player is ahead
-        # The reward goes to the player who just moved, so we look at their perspective
-        if value is not None and value > 0:
-            winning_values.append(value)
+    # Store metrics for logging
+    if not hasattr(game_history, 'alphabm_metrics'):
+        game_history.alphabm_metrics = {}
+    game_history.alphabm_metrics['avg_winning_value'] = episode_length  # Repurpose for episode length
+    game_history.alphabm_metrics['margin_penalty'] = margin_penalty
+    game_history.alphabm_metrics['shaped_reward'] = shaped_reward
+    game_history.alphabm_metrics['original_reward'] = base_reward
 
-    # Get config values with safe defaults
-    win_bonus = get_alphabm_config(config, 'alphabm_win_bonus', 1.0)
-    threshold = get_alphabm_config(config, 'alphabm_threshold', 0.3)
-    target_margin = get_alphabm_config(config, 'alphabm_target_margin', 0.1)
-    margin_penalty_weight = get_alphabm_config(config, 'alphabm_margin_penalty_weight', 0.3)
-
-    if len(winning_values) == 0:
-        # No positions where winner was clearly ahead - no penalty
-        return base_reward * win_bonus
-
-    avg_winning_value = numpy.mean(winning_values)
-
-    # Only apply penalty if average winning value exceeds threshold
-    if avg_winning_value > threshold:
-        # Compute margin penalty: how far from target margin
-        margin_excess = abs(avg_winning_value - target_margin)
-        margin_penalty = margin_excess * margin_penalty_weight
-
-        # Shaped reward: base win bonus minus margin penalty
-        shaped_reward = (base_reward * win_bonus) - margin_penalty
-
-        # Store AlphaBM metrics in game_history for logging
-        if not hasattr(game_history, 'alphabm_metrics'):
-            game_history.alphabm_metrics = {}
-        game_history.alphabm_metrics['avg_winning_value'] = avg_winning_value
-        game_history.alphabm_metrics['margin_penalty'] = margin_penalty
-        game_history.alphabm_metrics['shaped_reward'] = shaped_reward
-        game_history.alphabm_metrics['original_reward'] = base_reward
-
-        return shaped_reward
-
-    return base_reward * win_bonus
+    return shaped_reward
 
 
 @ray.remote

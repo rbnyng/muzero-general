@@ -112,13 +112,12 @@ class MuZeroConfig:
 
 
         ### AlphaBM (Barely-win/Margin) Settings
-        # When enabled, shapes rewards to encourage winning by small margins
-        # rather than maximizing winning margin. This creates "barely winning" behavior.
+        # When enabled, shapes rewards to penalize quick wins (short games).
+        # This encourages longer, closer games instead of dominant victories.
         self.alphabm_enabled = False  # Set to True to enable AlphaBM reward shaping
-        self.alphabm_target_margin = 0.1  # Target value estimate when winning (small = close game)
-        self.alphabm_margin_penalty_weight = 2.0  # How much to penalize deviating from target margin
-        self.alphabm_win_bonus = 1.0  # Base bonus for winning (multiplied by game reward)
-        self.alphabm_threshold = 0.3  # Only apply BM penalty when avg value > this threshold
+        self.alphabm_target_length = 30  # Target game length (moves). Games shorter get penalized.
+        self.alphabm_length_penalty_weight = 0.5  # Penalty per move below target (e.g., 0.5 * 10 moves short = -5)
+        self.alphabm_min_length = 10  # Minimum reasonable game length
         # fmt: on
 
     def visit_softmax_temperature_fn(self, trained_steps):
