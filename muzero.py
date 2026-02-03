@@ -1,4 +1,5 @@
 import copy
+import csv
 import importlib
 import json
 import math
@@ -209,6 +210,88 @@ class MuZero:
         if log_in_tensorboard:
             self.logging_loop(
                 num_gpus_per_worker if self.config.selfplay_on_gpu else 0,
+            )
+
+    def train_cluster(self, log_interval=100):
+        """
+        Train with simple CSV/stdout logging for cluster environments.
+        No TensorBoard, just periodic metrics to stdout and CSV file.
+
+        Args:
+            log_interval: Print/save metrics every N training steps
+        """
+        self.config.results_path.mkdir(parents=True, exist_ok=True)
+
+        # Start training (same as train() but without tensorboard logging)
+        self.train(log_in_tensorboard=False)
+
+        # CSV logging
+        csv_path = self.config.results_path / "metrics.csv"
+        keys = [
+            "training_step", "num_played_games", "num_played_steps",
+            "total_reward", "episode_length", "mean_value",
+            "total_loss", "value_loss", "reward_loss", "policy_loss",
+            "alphabm_avg_winning_value", "alphabm_margin_penalty", "alphabm_shaped_reward",
+        ]
+
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=keys)
+            writer.writeheader()
+
+        print(f"\nTraining... Logging to {csv_path}")
+        print(f"Config: alphabm_enabled={getattr(self.config, 'alphabm_enabled', False)}")
+
+        last_logged_step = -1
+        try:
+            while True:
+                info = ray.get(self.shared_storage_worker.get_info.remote(keys))
+                step = info["training_step"]
+
+                if step >= self.config.training_steps:
+                    break
+
+                if step > last_logged_step and step % log_interval == 0:
+                    last_logged_step = step
+
+                    # Append to CSV
+                    with open(csv_path, "a", newline="") as f:
+                        writer = csv.DictWriter(f, fieldnames=keys)
+                        writer.writerow({k: info[k] for k in keys})
+
+                    # Print summary
+                    print(
+                        f"[Step {step:6d}] "
+                        f"games={info['num_played_games']:4d} "
+                        f"reward={info['total_reward']:6.1f} "
+                        f"ep_len={info['episode_length']:4.1f} "
+                        f"loss={info['total_loss']:.3f}"
+                        + (
+                            f" | BM: avg_val={info['alphabm_avg_winning_value']:.2f} "
+                            f"penalty={info['alphabm_margin_penalty']:.2f}"
+                            if getattr(self.config, 'alphabm_enabled', False)
+                            else ""
+                        )
+                    )
+
+                time.sleep(1)
+
+        except KeyboardInterrupt:
+            print("\nInterrupted by user")
+
+        self.terminate_workers()
+        print(f"\nTraining complete. Metrics saved to {csv_path}")
+
+        if self.config.save_model:
+            path = self.config.results_path / "replay_buffer.pkl"
+            print(f"Saving replay buffer to {path}")
+            pickle.dump(
+                {
+                    "buffer": self.replay_buffer,
+                    "num_played_games": self.checkpoint["num_played_games"],
+                    "num_played_steps": self.checkpoint["num_played_steps"],
+                    "num_reanalysed_games": self.checkpoint["num_reanalysed_games"],
+                },
+                open(path, "wb"),
             )
 
     def logging_loop(self, num_gpus):
@@ -645,15 +728,28 @@ def load_model_menu(muzero, game_name):
 
 
 if __name__ == "__main__":
+    # Check for --cluster flag
+    cluster_mode = "--cluster" in sys.argv
+    if cluster_mode:
+        sys.argv.remove("--cluster")
+
     if len(sys.argv) == 2:
         # Train directly with: python muzero.py cartpole
+        # Or: python muzero.py cartpole --cluster
         muzero = MuZero(sys.argv[1])
-        muzero.train()
+        if cluster_mode:
+            muzero.train_cluster()
+        else:
+            muzero.train()
     elif len(sys.argv) == 3:
         # Train directly with: python muzero.py cartpole '{"lr_init": 0.01}'
+        # Or: python muzero.py cartpole '{"alphabm_enabled": true}' --cluster
         config = json.loads(sys.argv[2])
         muzero = MuZero(sys.argv[1], config)
-        muzero.train()
+        if cluster_mode:
+            muzero.train_cluster()
+        else:
+            muzero.train()
     else:
         print("\nWelcome to MuZero! Here's a list of games:")
         # Let user pick a game
